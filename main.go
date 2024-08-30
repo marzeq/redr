@@ -138,10 +138,11 @@ func handleConnection(conn net.Conn) {
 				} else {
 					conn.Write([]byte(command_ran_message(uint(exitError.ExitCode()))))
 				}
+			} else {
+				conn.Write([]byte(command_ran_message(0)))
 			}
-			fmt.Println()
 
-			conn.Write([]byte(command_ran_message(0)))
+			fmt.Println()
 		} else if message["type"] == "bye" {
 			hasClient = false
 			conn.Write([]byte(ok_message()))
