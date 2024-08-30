@@ -2,6 +2,22 @@
 
 redr is a simple (and very wip) command runner that can be communicated with via tcp sockets
 
+## installation/building
+
+[just](https://github.com/casey/just) is used here, so you need to have it installed
+
+### from releases
+
+not yet
+
+### from source
+
+```bash
+just build # outputs to build/current-target
+# or
+just build-all # outputs to build/{windows,linux,macos}/{amd64,arm64}
+```
+
 ## usage
 
 ```bash
@@ -10,7 +26,7 @@ redr # ctrl+c to stop server
 
 ## socket api
 
-this is the control flow of the socket api
+this is the control flow of the socket api. still wip, expect changes
 
 ```
 client connects to server
