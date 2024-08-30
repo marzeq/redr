@@ -80,6 +80,7 @@ func handleConnection(conn net.Conn) {
 
 	buf := make([]byte, MAX_BYTES)
 	introduced := false
+	oldCwd, _ := os.Getwd()
 
 	for {
 		n, err := conn.Read(buf)
@@ -101,6 +102,11 @@ func handleConnection(conn net.Conn) {
 			if hasClient {
 				conn.Write([]byte(kick_off_message()))
 				return
+			}
+
+			if message["cwd"] != nil {
+				cwd := message["cwd"].(string)
+				os.Chdir(cwd)
 			}
 
 			hasClient = true
@@ -139,6 +145,7 @@ func handleConnection(conn net.Conn) {
 		} else if message["type"] == "bye" {
 			hasClient = false
 			conn.Write([]byte(ok_message()))
+			os.Chdir(oldCwd)
 			return
 		}
 	}
