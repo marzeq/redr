@@ -1,16 +1,16 @@
-# redr - (r)un, (e)xecute, (d)isplay, (r)epeat
+# redr - (r)ecieve, (e)xecute, (d)isplay, (r)epeat
 
 redr is a simple (and very wip) command runner that can be communicated with via tcp sockets
 
 ## installation/building
-
-[just](https://github.com/casey/just) is used here, so you need to have it installed
 
 ### from releases
 
 not yet
 
 ### from source
+
+[just](https://github.com/casey/just) is used here, so you need to have it installed
 
 ```bash
 just build # outputs to build/current-target
@@ -42,5 +42,5 @@ server sends json: { "type": "ok" }
 if a client is already connected to the server, the server will immediately respond with a { "type": "kick_off" } message
 and will close the connection. the client is expected to handle this and not connect again until the server is has no clients connected
 
-if at any point the server gets an unexpected error, it will also send a { "type": "kick_off" } message and close the connection
-the client is expected to handle this, and shouldn't command-runneronnect until the server is restarted
+if at any point the server gets an unexpected error, it will also send a { "type": "kick_off" } message and close the connection.
+the client is expected to handle this, and shouldn't reonnect until the server is restarted
