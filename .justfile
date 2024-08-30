@@ -13,8 +13,8 @@ build-target OS ARCH:
   GOOS={{OS}} GOARCH={{ARCH}} go build -o {{builddir}}/{{OS}}/{{ARCH}}/{{projname}}{{ if OS == "windows" { ".exe" } else { "" } }}
 
 build-all: \
-  (build-target "windows" "amd64") \
-  (build-target "windows" "arm64") \
+  # (build-target "windows" "amd64") \
+  # (build-target "windows" "arm64") \
   (build-target "linux" "amd64")   \
   (build-target "linux" "arm64")   \
   (build-target "darwin" "amd64")  \
