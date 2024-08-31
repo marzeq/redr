@@ -130,6 +130,7 @@ func handleConnection(conn net.Conn) {
 			cmd := exec.Command(shell, "-c", command)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
+      cmd.Stdin = os.Stdin
 			err := cmd.Run()
 			if err != nil {
 				exitError, ok := err.(*exec.ExitError)
