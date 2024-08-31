@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 )
 
@@ -123,14 +124,20 @@ func handleConnection(conn net.Conn) {
 			command := message["command"].(string)
 
 			fmt.Println(">", command)
-			shell := os.Getenv("SHELL")
-			if shell == "" {
-				shell = "/bin/sh"
+			var cmd *exec.Cmd
+
+			if runtime.GOOS == "windows" {
+				cmd = exec.Command("powershell.exe", "-Command", command)
+			} else {
+				shell := os.Getenv("SHELL")
+				if shell == "" {
+					shell = "/bin/sh"
+				}
+				cmd = exec.Command(shell, "-c", command)
 			}
-			cmd := exec.Command(shell, "-c", command)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
-      cmd.Stdin = os.Stdin
+			cmd.Stdin = os.Stdin
 			err := cmd.Run()
 			if err != nil {
 				exitError, ok := err.(*exec.ExitError)
