@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 )
 
 func kick_off_message() string {
@@ -43,6 +44,9 @@ func setupSignalHandler(l net.Listener) {
 		<-c
 		disableAlternateScreen()
 		l.Close()
+		if currentCmd != nil && currentCmd.Process != nil {
+			currentCmd.Process.Kill()
+		}
 		os.Exit(0)
 	}()
 }
@@ -52,7 +56,12 @@ const (
 	PORT      = 45673
 )
 
-var hasClient = false
+var (
+	hasClient          = false
+	currentCmd         *exec.Cmd
+	currentConn        net.Conn
+	clientDisconnected = make(chan bool)
+)
 
 func main() {
 	enableAlternateScreen()
@@ -72,12 +81,29 @@ func main() {
 			break
 		}
 
+		if hasClient {
+			currentConn.Write([]byte(kick_off_message()))
+
+			currentConn.Close()
+			currentConn = nil
+			hasClient = false
+
+			if currentCmd != nil && currentCmd.Process != nil {
+				currentCmd.Process.Kill()
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+
+		currentConn = conn
 		go handleConnection(conn)
 	}
 }
 
 func handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		conn.Close()
+		clientDisconnected <- true
+	}()
 
 	buf := make([]byte, MAX_BYTES)
 	introduced := false
@@ -86,6 +112,10 @@ func handleConnection(conn net.Conn) {
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
+			if n == 0 || err.Error() == "use of closed network connection" {
+				hasClient = false
+				return
+			}
 			fmt.Println("Read error:", err)
 			hasClient = false
 			return
@@ -124,21 +154,19 @@ func handleConnection(conn net.Conn) {
 			command := message["command"].(string)
 
 			fmt.Println(">", command)
-			var cmd *exec.Cmd
-
 			if runtime.GOOS == "windows" {
-				cmd = exec.Command("powershell.exe", "-Command", command)
+				currentCmd = exec.Command("powershell.exe", "-Command", command)
 			} else {
 				shell := os.Getenv("SHELL")
 				if shell == "" {
 					shell = "/bin/sh"
 				}
-				cmd = exec.Command(shell, "-c", command)
+				currentCmd = exec.Command(shell, "-c", command)
 			}
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			cmd.Stdin = os.Stdin
-			err := cmd.Run()
+			currentCmd.Stdout = os.Stdout
+			currentCmd.Stderr = os.Stderr
+			currentCmd.Stdin = os.Stdin
+			err := currentCmd.Run()
 			if err != nil {
 				exitError, ok := err.(*exec.ExitError)
 				if !ok {
