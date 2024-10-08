@@ -24,16 +24,16 @@ func command_ran_message(exit_code uint) string {
 	return fmt.Sprintf("{\"type\": \"command_ran\", \"exit_code\": %d}\n", exit_code)
 }
 
-func enableAlternateScreen() {
-	fmt.Fprint(os.Stdout, "\033[?1049h\033[H")
-}
-
-func disableAlternateScreen() {
-	fmt.Fprint(os.Stdout, "\033[?1049l")
-}
-
 func clearScreen() {
-	fmt.Fprint(os.Stdout, "\033[2J\033[H")
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "cls")
+		cmd.Stdout = os.Stdout
+		cmd.Run()
+	} else {
+		cmd := exec.Command("clear")
+		cmd.Stdout = os.Stdout
+		cmd.Run()
+	}
 }
 
 func setupSignalHandler(l net.Listener) {
@@ -42,7 +42,7 @@ func setupSignalHandler(l net.Listener) {
 
 	go func() {
 		<-c
-		disableAlternateScreen()
+		clearScreen()
 		l.Close()
 		if currentCmd != nil && currentCmd.Process != nil {
 			currentCmd.Process.Kill()
@@ -64,8 +64,7 @@ var (
 )
 
 func main() {
-	enableAlternateScreen()
-	defer disableAlternateScreen()
+	clearScreen()
 	l, err := net.Listen("tcp", fmt.Sprintf(":%d", PORT))
 	setupSignalHandler(l)
 
