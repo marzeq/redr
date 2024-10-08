@@ -5,12 +5,12 @@ builddir := "build"
 projname := "redr"
 
 build:
-  mkdir -p {{builddir}}/current-target
-  go build -o {{builddir}}/current-target/{{projname}}
+  mkdir -p {{builddir}}
+  go build -o {{builddir}}/{{projname}} .
 
 build-target OS ARCH:
-  mkdir -p {{builddir}}/{{OS}}/{{ARCH}}
-  GOOS={{OS}} GOARCH={{ARCH}} go build -o {{builddir}}/{{OS}}/{{ARCH}}/{{projname}}{{ if OS == "windows" { ".exe" } else { "" } }}
+  mkdir -p {{builddir}}
+  GOOS={{OS}} GOARCH={{ARCH}} go build -o {{builddir}}/{{projname}}-{{OS}}-{{ARCH}}{{ if OS == "windows" { ".exe" } else { "" } }}
 
 build-all: \
   (build-target "windows" "amd64") \
