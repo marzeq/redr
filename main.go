@@ -107,6 +107,7 @@ func handleConnection(conn net.Conn) {
 	buf := make([]byte, MAX_BYTES)
 	introduced := false
 	oldCwd, _ := os.Getwd()
+	run_next_after_failure := false
 
 	for {
 		n, err := conn.Read(buf)
@@ -139,45 +140,90 @@ func handleConnection(conn net.Conn) {
 				os.Chdir(cwd)
 			}
 
+			if message["run_next_after_failure"] != nil {
+				run_next_after_failure = message["run_next_after_failure"].(bool)
+			}
+
 			hasClient = true
 			introduced = true
 			conn.Write([]byte(ok_message()))
 
 			clearScreen()
-		} else if message["type"] == "run_command" {
+		} else if message["type"] == "run_commands" {
 			if !introduced {
 				conn.Write([]byte(kick_off_message()))
 				return
 			}
 
-			command := message["command"].(string)
-
-			fmt.Println(">", command)
-			if runtime.GOOS == "windows" {
-				currentCmd = exec.Command("powershell.exe", "-Command", command)
-			} else {
-				shell := os.Getenv("SHELL")
-				if shell == "" {
-					shell = "/bin/sh"
-				}
-				currentCmd = exec.Command(shell, "-c", command)
+			commandsUnknown := message["commands"].([]interface{})
+			commands := make([]string, len(commandsUnknown))
+			for i, v := range commandsUnknown {
+				commands[i] = v.(string)
 			}
-			currentCmd.Stdout = os.Stdout
-			currentCmd.Stderr = os.Stderr
-			currentCmd.Stdin = os.Stdin
-			err := currentCmd.Run()
-			if err != nil {
-				exitError, ok := err.(*exec.ExitError)
-				if !ok {
-					conn.Write([]byte(command_ran_message(1)))
+
+			for _, command := range commands {
+				fmt.Println(">", command)
+				if runtime.GOOS == "windows" {
+					currentCmd = exec.Command("powershell.exe", "-Command", command)
 				} else {
-					conn.Write([]byte(command_ran_message(uint(exitError.ExitCode()))))
+					shell := os.Getenv("SHELL")
+					if shell == "" {
+						shell = "/bin/sh"
+					}
+					currentCmd = exec.Command(shell, "-c", command)
 				}
-			} else {
-				conn.Write([]byte(command_ran_message(0)))
-			}
+				currentCmd.Stdout = os.Stdout
+				currentCmd.Stderr = os.Stderr
+				currentCmd.Stdin = os.Stdin
+				err := currentCmd.Run()
+				tobreak := false
+				if err != nil {
+					exitError, ok := err.(*exec.ExitError)
+					if !ok {
+						conn.Write([]byte(command_ran_message(1)))
+					} else {
+						conn.Write([]byte(command_ran_message(uint(exitError.ExitCode()))))
+					}
 
-			fmt.Println()
+					if !run_next_after_failure {
+						tobreak = true
+					}
+				} else {
+					conn.Write([]byte(command_ran_message(0)))
+				}
+
+				n, err := conn.Read(buf)
+				if err != nil {
+					fmt.Println("Read error:", err)
+					return
+				}
+
+				messageStr := string(buf[:n])
+				var message map[string]interface{}
+				err = json.Unmarshal([]byte(messageStr), &message)
+				if err != nil {
+					fmt.Println("Error parsing json:", err)
+					return
+				}
+
+				if message["type"] == "bye" {
+					hasClient = false
+					conn.Write([]byte(ok_message()))
+					os.Chdir(oldCwd)
+					return
+				}
+
+				if message["type"] != "ok" {
+					fmt.Println("Unexpected message:", message)
+					return
+				}
+
+				fmt.Println()
+
+				if tobreak {
+					break
+				}
+			}
 		} else if message["type"] == "bye" {
 			hasClient = false
 			conn.Write([]byte(ok_message()))

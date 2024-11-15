@@ -30,13 +30,18 @@ this is the control flow of the socket api. still wip, expect changes
 
 ```
 client connects to server
-client sends message: { "type": "introduce", "cwd"?: "..." }
-server sends json: { "type": "ok" }
+client sends: { "type": "introduce", "cwd"?: "...", "run_next_after_failure"?: true|false } (run_next_after_failure defaults to false, cwd defaults to the server's cwd)
+server sends: { "type": "ok" }
+client sends: { "type": "run_commands", "commands": ["..."] }
+
 loop:
-  client sends message: { "type": "run_command", "command": "..." }
-  server sends json: { "type": "command_ran", "exit_code": 0 }
-client sends message: { "type": "bye" }
-server sends json: { "type": "ok" }
+  server sends: { "type": "command_ran", "exit_code": number }
+  client sends: { "type": "ok" } -- just meaning we acknowledged the message, and are ready for the next one, deciding to continue is up to the server
+
+server sends: { "type": "ok" } -- meaning command running process is done, regardless of the exit code
+client sends message: { "type": "bye" } -- client communicates that it's done
+server sends json: { "type": "ok" } -- server acknowledges the client's message
+parties can now close the connection
 ```
 
 if a client is already connected to the server, the server will immediately respond with a { "type": "kick_off" } message
