@@ -224,6 +224,8 @@ func handleConnection(conn net.Conn) {
 					break
 				}
 			}
+
+			conn.Write([]byte(ok_message()))
 		} else if message["type"] == "bye" {
 			hasClient = false
 			conn.Write([]byte(ok_message()))
