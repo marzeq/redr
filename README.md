@@ -1,6 +1,6 @@
 # redr - (r)ecieve, (e)xecute, (d)isplay, (r)epeat
 
-redr is a simple (and very wip) command runner that can be communicated with via tcp sockets
+redr is a simple command runner that can be communicated with via tcp sockets
 
 ## installation/building
 
@@ -26,26 +26,20 @@ redr # ctrl+c to stop server
 
 ## socket api
 
-this is the control flow of the socket api. still wip, expect changes
-
 ```
+server supports multiple clients connected at once, but when a new "run" command is sent, the current
+command set is cleared and if any command is running it is killed
+
+control flow:
+
 client connects to server
-client sends: { "type": "introduce", "cwd"?: "...", "run_next_after_failure"?: true|false } (run_next_after_failure defaults to false, cwd defaults to the server's cwd)
-server sends: { "type": "ok" }
-client sends: { "type": "run_commands", "commands": ["..."] }
+at some point, client sends: { "type": "run", "commands": ["..."], "cwd"?: "...", "run_next_after_failure"?: true|false } (run_next_after_failure defaults to false, cwd defaults to the server's cwd)
+server sends to the client: { "type": "ok" }
 
 loop:
-  server sends: { "type": "command_ran", "exit_code": number }
-  client sends: { "type": "ok" } -- just meaning we acknowledged the message, and are ready for the next one, deciding to continue is up to the server
+  server sends to every client: { "type": "command_ran", "exit_code": number, "cmd": string, "last": boolean } after each command ran
 
-server sends: { "type": "ok" } -- meaning command running process is done, regardless of the exit code
-client sends message: { "type": "bye" } -- client communicates that it's done
-server sends json: { "type": "ok" } -- server acknowledges the client's message
-parties can now close the connection
+the client can now disconnect
+
+at any point, the client can send a { "type": "ignore" } message, and the server will simply ignore it
 ```
-
-if a client is already connected to the server, the server will immediately respond with a { "type": "kick_off" } message
-and will close the connection. the client is expected to handle this and not connect again until the server is has no clients connected
-
-if at any point the server gets an unexpected error, it will also send a { "type": "kick_off" } message and close the connection.
-the client is expected to handle this, and shouldn't reonnect until the server is restarted

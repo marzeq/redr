@@ -8,20 +8,28 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
-	"time"
 )
 
-func kick_off_message() string {
-	return "{\"type\": \"kick_off\"}\n"
+func jsonEscape(i string) string {
+	b, err := json.Marshal(i)
+	if err != nil {
+		panic(err)
+	}
+	return string(b[1 : len(b)-1])
 }
 
-func ok_message() string {
+func okMessage() string {
 	return "{\"type\": \"ok\"}\n"
 }
 
-func command_ran_message(exit_code uint) string {
-	return fmt.Sprintf("{\"type\": \"command_ran\", \"exit_code\": %d}\n", exit_code)
+func commandRanMessage(exitCode uint, cmd string, last bool, silent bool) string {
+	return fmt.Sprintf("{\"type\": \"command_ran\", \"exit_code\": %d, \"cmd\": \"%s\", \"last\": %v, \"silent\": %v}\n", exitCode, jsonEscape(cmd), last, silent)
+}
+
+func doneMessage() string {
+	return "{\"type\": \"done\"}\n"
 }
 
 func clearScreen() {
@@ -36,88 +44,68 @@ func clearScreen() {
 	}
 }
 
-func setupSignalHandler(l net.Listener) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-c
-		clearScreen()
-		l.Close()
-		if currentCmd != nil && currentCmd.Process != nil {
-			currentCmd.Process.Kill()
-		}
-		os.Exit(0)
-	}()
-}
-
 const (
 	MAX_BYTES = 16 * 1024
 	PORT      = 45673
 )
 
 var (
-	hasClient          = false
-	currentCmd         *exec.Cmd
-	currentConn        net.Conn
-	clientDisconnected = make(chan bool)
+	clients      = make(map[net.Conn]bool)
+	clientsMutex sync.Mutex
+	commandMutex sync.Mutex
+	currentCmd   *exec.Cmd
+	serverCWD, _ = os.Getwd()
 )
 
-func main() {
-	clearScreen()
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", PORT))
-	setupSignalHandler(l)
+func setupSignalHandler(listener net.Listener) {
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	if err != nil {
-		fmt.Println("Listen error:", err)
-		return
-	}
-	defer l.Close()
+	go func() {
+		<-signalChan
+		clearScreen()
+		listener.Close()
+		shutdown()
+		os.Exit(0)
+	}()
+}
 
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			break
-		}
-
-		if hasClient {
-			currentConn.Write([]byte(kick_off_message()))
-
-			currentConn.Close()
-			currentConn = nil
-			hasClient = false
-
-			if currentCmd != nil && currentCmd.Process != nil {
-				currentCmd.Process.Kill()
-				time.Sleep(500 * time.Millisecond)
-			}
-		}
-
-		currentConn = conn
-		go handleConnection(conn)
+func broadcast(message string) {
+	clientsMutex.Lock()
+	defer clientsMutex.Unlock()
+	for client := range clients {
+		client.Write([]byte(message))
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func shutdown() {
+	clientsMutex.Lock()
+	defer clientsMutex.Unlock()
+	for client := range clients {
+		client.Close()
+	}
+	if currentCmd != nil && currentCmd.Process != nil {
+		currentCmd.Process.Kill()
+	}
+}
+
+func handleClient(conn net.Conn) {
+	clientsMutex.Lock()
+	clients[conn] = true
+	clientsMutex.Unlock()
+
 	defer func() {
+		clientsMutex.Lock()
+		delete(clients, conn)
+		clientsMutex.Unlock()
 		conn.Close()
-		clientDisconnected <- true
 	}()
 
 	buf := make([]byte, MAX_BYTES)
-	introduced := false
-	oldCwd, _ := os.Getwd()
-	run_next_after_failure := false
 
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-			if n == 0 || err.Error() == "use of closed network connection" {
-				hasClient = false
-				return
-			}
-			fmt.Println("Read error:", err)
-			hasClient = false
 			return
 		}
 
@@ -125,112 +113,104 @@ func handleConnection(conn net.Conn) {
 		var message map[string]interface{}
 		err = json.Unmarshal([]byte(messageStr), &message)
 		if err != nil {
-			fmt.Println("Error parsing json:", err)
+			fmt.Println("Error parsing JSON:", err)
 			return
 		}
 
-		if message["type"] == "introduce" {
-			if hasClient {
-				conn.Write([]byte(kick_off_message()))
-				return
-			}
-
+		if message["type"] == "run" {
+			cwd := serverCWD
 			if message["cwd"] != nil {
-				cwd := message["cwd"].(string)
-				os.Chdir(cwd)
+				cwd = message["cwd"].(string)
 			}
 
+			runNextAfterFailure := false
 			if message["run_next_after_failure"] != nil {
-				run_next_after_failure = message["run_next_after_failure"].(bool)
+				runNextAfterFailure = message["run_next_after_failure"].(bool)
 			}
 
-			hasClient = true
-			introduced = true
-			conn.Write([]byte(ok_message()))
-
-			clearScreen()
-		} else if message["type"] == "run_commands" {
-			if !introduced {
-				conn.Write([]byte(kick_off_message()))
-				return
+			commands := message["commands"].([]interface{})
+			commandStrings := make([]string, len(commands))
+			for i, cmd := range commands {
+				commandStrings[i] = cmd.(string)
 			}
 
-			commandsUnknown := message["commands"].([]interface{})
-			commands := make([]string, len(commandsUnknown))
-			for i, v := range commandsUnknown {
-				commands[i] = v.(string)
-			}
+			conn.Write([]byte(okMessage()))
 
-			for _, command := range commands {
-				fmt.Println(">", command)
-				if runtime.GOOS == "windows" {
-					currentCmd = exec.Command("powershell.exe", "-Command", command)
-				} else {
-					shell := os.Getenv("SHELL")
-					if shell == "" {
-						shell = "/bin/sh"
-					}
-					currentCmd = exec.Command(shell, "-c", command)
-				}
-				currentCmd.Stdout = os.Stdout
-				currentCmd.Stderr = os.Stderr
-				currentCmd.Stdin = os.Stdin
-				err := currentCmd.Run()
-				tobreak := false
-				if err != nil {
-					exitError, ok := err.(*exec.ExitError)
-					if !ok {
-						conn.Write([]byte(command_ran_message(1)))
-					} else {
-						conn.Write([]byte(command_ran_message(uint(exitError.ExitCode()))))
-					}
-
-					if !run_next_after_failure {
-						tobreak = true
-					}
-				} else {
-					conn.Write([]byte(command_ran_message(0)))
-				}
-
-				n, err := conn.Read(buf)
-				if err != nil {
-					fmt.Println("Read error:", err)
-					return
-				}
-
-				messageStr := string(buf[:n])
-				var message map[string]interface{}
-				err = json.Unmarshal([]byte(messageStr), &message)
-				if err != nil {
-					fmt.Println("Error parsing json:", err)
-					return
-				}
-
-				if message["type"] == "bye" {
-					hasClient = false
-					conn.Write([]byte(ok_message()))
-					os.Chdir(oldCwd)
-					return
-				}
-
-				if message["type"] != "ok" {
-					fmt.Println("Unexpected message:", message)
-					return
-				}
-
-				fmt.Println()
-
-				if tobreak {
-					break
-				}
-			}
-
-			conn.Write([]byte(ok_message()))
-		} else if message["type"] == "bye" {
-			hasClient = false
-			conn.Write([]byte(ok_message()))
-			os.Chdir(oldCwd)
-			return
+			commandMutex.Lock()
+			go executeCommands(commandStrings, cwd, runNextAfterFailure)
+			commandMutex.Unlock()
+		} else if message["type"] == "ignore" {
 		}
+	}
+}
+
+func executeCommands(commands []string, cwd string, runNextAfterFailure bool) {
+	oldCWD, _ := os.Getwd()
+	defer os.Chdir(oldCWD)
+	os.Chdir(cwd)
+
+	if currentCmd != nil && currentCmd.Process != nil {
+		currentCmd.Process.Kill()
+	}
+
+	clearScreen()
+	for i, command := range commands {
+		fmt.Println(">", command)
+
+		if runtime.GOOS == "windows" {
+			currentCmd = exec.Command("powershell.exe", "-Command", command)
+		} else {
+			shell := os.Getenv("SHELL")
+			if shell == "" {
+				shell = "/bin/sh"
+			}
+			currentCmd = exec.Command(shell, "-c", command)
+		}
+
+		currentCmd.Stdout = os.Stdout
+		currentCmd.Stderr = os.Stderr
+		currentCmd.Stdin = os.Stdin
+
+		err := currentCmd.Run()
+		exitCode := uint(0)
+		if err != nil {
+			if exitError, ok := err.(*exec.ExitError); ok {
+				exitCode = uint(exitError.ExitCode())
+			} else {
+				exitCode = 1
+			}
+		}
+		last := err != nil && !runNextAfterFailure || i == len(commands)-1
+
+		// command was killed
+		if exitCode > 255 {
+			broadcast(commandRanMessage(exitCode, command, last, true))
+		} else {
+			broadcast(commandRanMessage(exitCode, command, last, false))
+		}
+
+		if last {
+			break
+		}
+	}
+}
+
+func main() {
+	clearScreen()
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", PORT))
+	if err != nil {
+		fmt.Println("Listen error:", err)
+		return
+	}
+	defer listener.Close()
+
+	setupSignalHandler(listener)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			break
+		}
+		go handleClient(conn)
 	}
 }
