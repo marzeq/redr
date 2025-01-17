@@ -6,43 +6,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"os/signal"
 	"runtime"
 	"sync"
-	"syscall"
 )
-
-func jsonEscape(i string) string {
-	b, err := json.Marshal(i)
-	if err != nil {
-		panic(err)
-	}
-	return string(b[1 : len(b)-1])
-}
-
-func okMessage() string {
-	return "{\"type\": \"ok\"}\n"
-}
-
-func commandRanMessage(exitCode uint, cmd string, last bool, silent bool) string {
-	return fmt.Sprintf("{\"type\": \"command_ran\", \"exit_code\": %d, \"cmd\": \"%s\", \"last\": %v, \"silent\": %v}\n", exitCode, jsonEscape(cmd), last, silent)
-}
-
-func doneMessage() string {
-	return "{\"type\": \"done\"}\n"
-}
-
-func clearScreen() {
-	if runtime.GOOS == "windows" {
-		cmd := exec.Command("cmd", "/c", "cls")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
-	} else {
-		cmd := exec.Command("clear")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
-	}
-}
 
 const (
 	MAX_BYTES = 16 * 1024
@@ -51,41 +17,18 @@ const (
 
 var (
 	clients      = make(map[net.Conn]bool)
+	killed       bool
 	clientsMutex sync.Mutex
 	commandMutex sync.Mutex
 	currentCmd   *exec.Cmd
 	serverCWD, _ = os.Getwd()
 )
 
-func setupSignalHandler(listener net.Listener) {
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-signalChan
-		clearScreen()
-		listener.Close()
-		shutdown()
-		os.Exit(0)
-	}()
-}
-
 func broadcast(message string) {
 	clientsMutex.Lock()
 	defer clientsMutex.Unlock()
 	for client := range clients {
 		client.Write([]byte(message))
-	}
-}
-
-func shutdown() {
-	clientsMutex.Lock()
-	defer clientsMutex.Unlock()
-	for client := range clients {
-		client.Close()
-	}
-	if currentCmd != nil && currentCmd.Process != nil {
-		currentCmd.Process.Kill()
 	}
 }
 
@@ -137,6 +80,11 @@ func handleClient(conn net.Conn) {
 			conn.Write([]byte(okMessage()))
 
 			commandMutex.Lock()
+			if currentCmd != nil && currentCmd.Process != nil {
+				currentCmd.Process.Kill()
+				currentCmd.Wait()
+				resetTerminal()
+			}
 			go executeCommands(commandStrings, cwd, runNextAfterFailure)
 			commandMutex.Unlock()
 		} else if message["type"] == "ignore" {
@@ -148,10 +96,6 @@ func executeCommands(commands []string, cwd string, runNextAfterFailure bool) {
 	oldCWD, _ := os.Getwd()
 	defer os.Chdir(oldCWD)
 	os.Chdir(cwd)
-
-	if currentCmd != nil && currentCmd.Process != nil {
-		currentCmd.Process.Kill()
-	}
 
 	clearScreen()
 	for i, command := range commands {
@@ -180,14 +124,15 @@ func executeCommands(commands []string, cwd string, runNextAfterFailure bool) {
 				exitCode = 1
 			}
 		}
+
 		last := err != nil && !runNextAfterFailure || i == len(commands)-1
 
-		// command was killed
-		if exitCode > 255 {
-			broadcast(commandRanMessage(exitCode, command, last, true))
-		} else {
-			broadcast(commandRanMessage(exitCode, command, last, false))
+		if killed {
+			broadcast(commandRanMessage(exitCode, command, true, true))
+			break
 		}
+
+		broadcast(commandRanMessage(exitCode, command, last, false))
 
 		if last {
 			break
@@ -204,7 +149,7 @@ func main() {
 	}
 	defer listener.Close()
 
-	setupSignalHandler(listener)
+	setupCleanCloseHandler(listener)
 
 	for {
 		conn, err := listener.Accept()
